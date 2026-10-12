@@ -1,12 +1,17 @@
-# Builds and publishes a release when a version tag is pushed:
-#   git tag v1.0.1 && git push origin v1.0.1
-# The tray app's updater looks at the latest release, so publishing one is all it takes for
-# installed copies to update themselves.
+# Builds and publishes a GitHub release for the version in version.h.
+#
+# Runs when version.h (or this workflow) changes on main, when a v* tag is pushed, or by hand
+# from the Actions tab. If a release for that version already exists it does nothing, so
+# re-runs are harmless. The tray app's updater looks at the latest release, so publishing one
+# is all it takes for installed copies to update themselves.
 name: Release
 
 on:
   push:
+    branches: [main]
+    paths: ["version.h", ".github/workflows/release.yml"]
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -17,28 +22,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check tag matches version.h
+      - name: Read version
         id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          VER="${TAG#v}"
-          FILE_VER="$(sed -n 's/^#define XRTS_VERSION "\(.*\)"/\1/p' version.h)"
-          if [ "$VER" != "$FILE_VER" ]; then
-            echo "::error::Tag $TAG doesn't match version.h ($FILE_VER). Bump version.h first."
+          VER="$(sed -n 's/^#define XRTS_VERSION "\(.*\)"/\1/p' version.h)"
+          if [ -z "$VER" ]; then echo "::error::No XRTS_VERSION in version.h"; exit 1; fi
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$VER" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match version.h ($VER). Bump version.h first."
             exit 1
           fi
           echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VER" >> "$GITHUB_OUTPUT"
+          if gh release view "v$VER" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release v$VER already exists; nothing to do."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install MinGW-w64
+        if: steps.ver.outputs.exists == 'false'
         run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64-posix
 
       - name: Run tests
+        if: steps.ver.outputs.exists == 'false'
         run: scripts/run-tests.sh
 
       - name: Build Windows binaries
+        if: steps.ver.outputs.exists == 'false'
         run: scripts/build-windows.sh build/package
 
       - name: Package
+        if: steps.ver.outputs.exists == 'false'
         run: |
           VER="${{ steps.ver.outputs.version }}"
           mkdir -p build/release
@@ -53,6 +70,7 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: Release notes from CHANGELOG.md
+        if: steps.ver.outputs.exists == 'false'
         run: |
           VER="${{ steps.ver.outputs.version }}"
           awk -v v="$VER" '
@@ -68,9 +86,11 @@ jobs:
           cat build/notes.md
 
       - name: Publish release
+        if: steps.ver.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VER="${{ steps.ver.outputs.version }}"
-          gh release create "$GITHUB_REF_NAME" build/release/* \
-            --title "XrTriggerSnap $VER" --notes-file build/notes.md --verify-tag
+          # Creates the tag at this commit if it doesn't exist yet.
+          gh release create "${{ steps.ver.outputs.tag }}" build/release/* --target "$GITHUB_SHA" \
+            --title "XrTriggerSnap $VER" --notes-file build/notes.md

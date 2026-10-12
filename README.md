@@ -160,13 +160,10 @@ Neither build needs a Visual C++ redistributable at runtime.
 
 1. Bump the numbers in `version.h`.
 2. Add a `## <version>` section at the top of `CHANGELOG.md`; it becomes the release notes.
-3. Commit, then tag and push:
-   ```
-   git tag v1.0.1
-   git push origin main v1.0.1
-   ```
+3. Commit and push to `main`.
 
-The **Release** workflow runs the tests, builds the Windows binaries, and publishes a GitHub
-release with the zip, the individual files and `SHA256SUMS.txt`. Installed copies pick it up
-within 6 hours, or at their next start. The workflow refuses to run if the tag and `version.h`
-disagree.
+When `version.h` changes on `main`, the **Release** workflow runs the tests, builds the Windows
+binaries, and publishes a GitHub release (tag `v<version>`) with the zip, the individual files and
+`SHA256SUMS.txt`. Installed copies pick it up within 6 hours, or at their next start. You can
+also start it by hand from the Actions tab, or by pushing a `v<version>` tag. If a release for that
+version already exists, it does nothing.
