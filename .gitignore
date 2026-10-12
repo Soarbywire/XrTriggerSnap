@@ -1,0 +1,8 @@
+build/
+dist/*.dll
+dist/*.exe
+dist/*.so
+*.log
+*.o
+update/
+*.old

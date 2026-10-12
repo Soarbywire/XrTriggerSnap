@@ -1,0 +1,76 @@
+# Builds and publishes a release when a version tag is pushed:
+#   git tag v1.0.1 && git push origin v1.0.1
+# The tray app's updater looks at the latest release, so publishing one is all it takes for
+# installed copies to update themselves.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag matches version.h
+        id: ver
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+          FILE_VER="$(sed -n 's/^#define XRTS_VERSION "\(.*\)"/\1/p' version.h)"
+          if [ "$VER" != "$FILE_VER" ]; then
+            echo "::error::Tag $TAG doesn't match version.h ($FILE_VER). Bump version.h first."
+            exit 1
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Install MinGW-w64
+        run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64-posix
+
+      - name: Run tests
+        run: scripts/run-tests.sh
+
+      - name: Build Windows binaries
+        run: scripts/build-windows.sh build/package
+
+      - name: Package
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          mkdir -p build/release
+          cd build/package
+          zip -9 "../release/XrTriggerSnap-$VER.zip" XrTriggerSnap.exe XR_APILAYER_trigger_snap.dll \
+            XR_APILAYER_trigger_snap.json trigger_snap.ini README.md
+          # Individual files are what the updater downloads; the zip is for people.
+          cp XrTriggerSnap.exe XR_APILAYER_trigger_snap.dll XR_APILAYER_trigger_snap.json README.md ../release/
+          cd ../release
+          sha256sum XrTriggerSnap.exe XR_APILAYER_trigger_snap.dll XR_APILAYER_trigger_snap.json README.md \
+            "XrTriggerSnap-$VER.zip" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          awk -v v="$VER" '
+            /^## / { if (found) exit; if ($2 == v) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > build/notes.md
+          if [ ! -s build/notes.md ]; then echo "XrTriggerSnap $VER" > build/notes.md; fi
+          {
+            echo
+            echo "**Install:** download \`XrTriggerSnap-$VER.zip\`, unzip it somewhere permanent and run \`XrTriggerSnap.exe\`."
+            echo "Installed copies update themselves automatically."
+          } >> build/notes.md
+          cat build/notes.md
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          gh release create "$GITHUB_REF_NAME" build/release/* \
+            --title "XrTriggerSnap $VER" --notes-file build/notes.md --verify-tag

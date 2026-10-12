@@ -1,0 +1,31 @@
+#include <windows.h>
+#include "resource.h"
+#include "../version.h"
+
+IDI_APP ICON "icon_on.ico"
+IDI_OFF ICON "icon_off.ico"
+
+1 RT_MANIFEST "tray.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION XRTS_VERSION_MAJOR,XRTS_VERSION_MINOR,XRTS_VERSION_PATCH,0
+PRODUCTVERSION XRTS_VERSION_MAJOR,XRTS_VERSION_MINOR,XRTS_VERSION_PATCH,0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "FileDescription", "XrTriggerSnap - X-Plane hand tracking pinch filter"
+      VALUE "FileVersion", XRTS_VERSION
+      VALUE "ProductName", "XrTriggerSnap"
+      VALUE "ProductVersion", XRTS_VERSION
+      VALUE "OriginalFilename", "XrTriggerSnap.exe"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
