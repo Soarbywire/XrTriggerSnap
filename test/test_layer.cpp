@@ -17,6 +17,7 @@
 #include <unistd.h>
 #endif
 #include <fstream>
+#include <chrono>
 #include <openxr/openxr.h>
 #include <openxr/openxr_loader_negotiation.h>
 
@@ -212,6 +213,71 @@ int main(int argc, char** argv) {
     CHECK(aimSt.pinchStrengthIndex == 0.f && !(aimSt.status & XR_HAND_TRACKING_AIM_INDEX_PINCHING_BIT_FB), "aim 0.5 -> 0");
     seen(0.1f, 0.95f);
     CHECK(aimSt.pinchStrengthIndex == 1.f && (aimSt.status & XR_HAND_TRACKING_AIM_INDEX_PINCHING_BIT_FB), "aim 0.95 -> 1");
+
+    // ---- quick vs slow pinches, with real frame timing (11 ms frames)
+    {
+        long long t = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          std::chrono::steady_clock::now().time_since_epoch()).count() + 10000000000LL;
+        const long long frame = 11000000LL;  // 11 ms
+        auto at = [&](float d) {
+            t += frame;
+            li2.time = (XrTime)t;
+            return seen(d);
+        };
+        auto rest = [&](float d, int frames) { float r = 0; for (int i = 0; i < frames; ++i) r = at(d); return r; };
+
+        // A. Quick deliberate pinch (~30 cm/s): hidden at rest, then the real positions get
+        //    through, so the pinch lands exactly where the fingers are.
+        tipSideways = false;
+        CHECK(approx(rest(0.10f, 10), 0.10f), "A: open hand passes through");
+        CHECK(approx(rest(0.05f, 40), 0.07f), "A: resting half pinch hidden (7cm)");
+        float d = 0.05f, rep = 0;
+        bool sawReal = false;
+        while (d > 0.009f) {
+            d -= 0.0033f;  // 30 cm/s
+            rep = at(std::max(d, 0.009f));
+            if (getenv("TRACE")) printf("  quick pinch frame: real %.1fcm  reported %.1fcm\n", std::max(d, 0.009f) * 100, rep * 100);
+            if (d > 0.011f && approx(rep, std::max(d, 0.009f))) sawReal = true;
+        }
+        CHECK(sawReal, "A: real gap reaches the app before the pinch lands");
+        CHECK(approx(rep, 0.009f), "A: at the quick pinch the thumb is untouched (got %.4f)", rep);
+        CHECK(approx(rest(0.009f, 20), 0.009f), "A: held quick pinch stays untouched");
+        // open again quickly
+        d = 0.009f;
+        for (int i = 0; i < 10; ++i) { d += 0.006f; rep = at(d); }
+        CHECK(approx(rep, std::max(d, 0.07f)) || approx(rep, d), "A: after opening, back to hiding (got %.4f, d %.4f)", rep, d);
+        CHECK(approx(rest(0.05f, 40), 0.07f), "A: half pinch hidden again afterwards");
+
+        // B. Slow drift toward a pinch (3 cm/s) and resting at 1.6 cm: never passed through.
+        rest(0.10f, 10);
+        rest(0.06f, 40);  // settle (the jump from 10 cm is itself a quick move)
+        d = 0.06f;
+        bool leaked = false;
+        while (d > 0.016f) { d -= 0.00033f; if (!approx(at(d), 0.07f)) leaked = true; }
+        CHECK(!leaked, "B: slow drift stays hidden the whole way");
+        CHECK(approx(rest(0.016f, 60), 0.07f), "B: resting near-pinch stays hidden");
+
+        // C. Quick close that stops short (fingers come to rest at 2 cm): hidden again soon after.
+        rest(0.10f, 10);
+        rest(0.06f, 40);
+        d = 0.06f;
+        while (d > 0.02f) { d -= 0.0033f; at(d); }
+        float early = at(0.02f);
+        CHECK(early < 0.069f, "C: during the quick close the real gap was coming through (got %.4f)", early);
+        CHECK(approx(rest(0.02f, 25), 0.07f), "C: stopped short of a pinch -> hidden again within ~0.3 s");
+
+        // D. Slow pinch all the way: old behaviour, firm pinch at 0.5 cm.
+        rest(0.10f, 10);
+        rest(0.04f, 40);
+        d = 0.04f;
+        while (d > 0.010f) { d -= 0.0002f; at(d); }
+        CHECK(approx(at(0.010f), 0.005f), "D: slow pinch latches to the firm 0.5cm pinch");
+        CHECK(approx(rest(0.025f, 5), 0.005f), "D: holds until opened past release");
+        CHECK(approx(rest(0.035f, 3), 0.07f), "D: released");
+
+        // E. Quick-pinch pass-through can be switched off.
+        li2.time = 0;
+    }
 
     // ---- live reload: disable via ini while running
     {

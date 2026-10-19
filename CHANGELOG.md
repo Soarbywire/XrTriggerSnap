@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.1
+
+- Fixed: finger-and-thumb pinches could land off target or not register, while laser clicks
+  worked. To hide a half pinch, the filter reports your thumb further away than it is, and
+  X-Plane places a direct pinch between your thumb and index fingertips, so that point was
+  being pulled off target. Quick, deliberate pinches now pass your real finger positions
+  through, so they land exactly where your fingers are. Slow drift and resting near-pinches
+  are still hidden, so the laser stays away.
+- New setting: "Quick pinches use your real finger positions" (on by default). Turn it off
+  for the 1.0.0 behaviour.
+- During a quick pinch you may see the laser flicker briefly, the same as without the filter.
+- The log now shows quick pinches and how many happened in each 5-second summary.
+
 ## 1.0.0
 
 First release.

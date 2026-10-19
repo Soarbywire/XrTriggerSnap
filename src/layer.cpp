@@ -29,6 +29,8 @@
 #include <mutex>
 #include <fstream>
 #include <sys/stat.h>
+#include <chrono>
+#include <cstdint>
 #include <algorithm>
 
 #ifdef _WIN32
@@ -76,6 +78,11 @@ struct Config {
     float jointRelease = 0.030f;  // once pinched, stays pinched until wider than this
     float jointOpen = 0.070f;     // anything in between is reported at this distance
     float jointPinched = 0.005f;  // distance reported while pinched
+    // Quick, deliberate pinches pass through untouched (real finger positions, so X-Plane
+    // places the pinch exactly where the fingers are). Only slow drift / resting near-pinches
+    // are hidden. "Quick" = thumb-index gap closing faster than this (m/s).
+    bool fastPinch = true;
+    float fastPinchSpeed = 0.15f;
     int logLevel = 1;  // 0 off, 1 setup info, 2 also value changes
     bool launchTray = true;  // start XrTriggerSnap.exe (tray app) when X-Plane loads the layer
 };
@@ -180,6 +187,8 @@ void loadConfig() {
         else if (k == "joint_release_cm") g_cfg.jointRelease = (float)atof(v.c_str()) / 100.f;
         else if (k == "joint_open_cm") g_cfg.jointOpen = (float)atof(v.c_str()) / 100.f;
         else if (k == "joint_pinched_cm") g_cfg.jointPinched = (float)atof(v.c_str()) / 100.f;
+        else if (k == "fast_pinch") g_cfg.fastPinch = parseBool(v);
+        else if (k == "fast_pinch_speed_cm_s") g_cfg.fastPinchSpeed = (float)atof(v.c_str()) / 100.f;
         else if (k == "launch_tray") g_cfg.launchTray = parseBool(v);
     }
     if (g_cfg.releaseThreshold > g_cfg.pressThreshold) g_cfg.releaseThreshold = g_cfg.pressThreshold;
@@ -213,9 +222,11 @@ void openLog() {
 }
 
 void logConfig(const char* what) {
-    logf(1, "%s: enabled=%d hands=%s trigger press=%.2f release=%.2f | pinch close=%.1fcm release=%.1fcm open=%.1fcm",
+    logf(1, "%s: enabled=%d hands=%s trigger press=%.2f release=%.2f | pinch close=%.1fcm release=%.1fcm open=%.1fcm"
+            " | quick pinch pass-through=%d above %.0fcm/s",
          what, g_cfg.enabled, g_cfg.hands.c_str(), g_cfg.pressThreshold, g_cfg.releaseThreshold,
-         g_cfg.jointClose * 100.f, g_cfg.jointRelease * 100.f, g_cfg.jointOpen * 100.f);
+         g_cfg.jointClose * 100.f, g_cfg.jointRelease * 100.f, g_cfg.jointOpen * 100.f, g_cfg.fastPinch,
+         g_cfg.fastPinchSpeed * 100.f);
 }
 
 #ifdef _WIN32
@@ -261,12 +272,29 @@ PFN_xrDestroyHandTrackerEXT next_xrDestroyHandTrackerEXT = nullptr;
 PFN_xrLocateHandJointsEXT next_xrLocateHandJointsEXT = nullptr;
 
 struct HandState {
+    // Hidden:      fingers apart or drifting; any half pinch is reported as an open hand
+    // PinchHidden: slow pinch reached; reported firmly pinched until the fingers open again
+    // Pass:        fingers closing quickly (a deliberate pinch); real positions passed through
+    // PassPinched: that quick pinch landed; still passing real positions through
+    enum Mode { Hidden, PinchHidden, Pass, PassPinched };
     XrHandEXT hand = XR_HAND_LEFT_EXT;
     bool firstLocateLogged = false;
-    bool pinched = false;      // joint-distance latch
+    Mode mode = Hidden;
     bool aimPinched = false;   // FB aim pinchStrength latch
+    int64_t lastT = 0;         // time of the last motion sample (ns)
+    float ds = -1.f;           // smoothed thumb-index gap (m)
+    float v = 0.f;             // smoothed rate of change of the gap (m/s, negative = closing)
+    float reported = -1.f;     // gap reported to the app last frame (m)
+    int64_t stallSince = 0;    // when a quick close stopped moving (ns)
     float minDist = 1e9f, maxAim = 0.f;  // activity since last summary
+    int quickPinches = 0;                // since last summary
+    void reset() { mode = Hidden; aimPinched = false; reported = -1.f; stallSince = 0; }
 };
+
+int64_t steadyNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 std::map<XrHandTrackerEXT, HandState> g_hands;
 
 // Periodic diagnostics, driven from xrSyncActions.
@@ -406,7 +434,7 @@ XrResult XRAPI_CALL hook_xrSyncActions(XrSession session, const XrActionsSyncInf
                 g_cfg.logLevel = keep;
             }
             // Drop any latched state so a change takes effect cleanly.
-            for (auto& kv : g_hands) kv.second.pinched = kv.second.aimPinched = false;
+            for (auto& kv : g_hands) kv.second.reset();
         }
     }
 
@@ -439,12 +467,13 @@ XrResult XRAPI_CALL hook_xrSyncActions(XrSession session, const XrActionsSyncInf
         for (auto& kv : g_hands) {
             HandState& h = kv.second;
             if (h.minDist < 1e8f) {
-                snprintf(buf, sizeof(buf), " %s-hand(min thumb-index %.1fcm, max aim pinch %.2f)",
-                         h.hand == XR_HAND_LEFT_EXT ? "left" : "right", h.minDist * 100.f, h.maxAim);
+                snprintf(buf, sizeof(buf), " %s-hand(min thumb-index %.1fcm, quick pinches %d, max aim pinch %.2f)",
+                         h.hand == XR_HAND_LEFT_EXT ? "left" : "right", h.minDist * 100.f, h.quickPinches, h.maxAim);
                 line += buf;
             }
             h.minDist = 1e9f;
             h.maxAim = 0.f;
+            h.quickPinches = 0;
         }
         if (!line.empty()) logf(1, "activity (last 5s):%s", line.c_str());
     }
@@ -579,18 +608,92 @@ XrResult XRAPI_CALL hook_xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const X
     h.minDist = std::min(h.minDist, d);
     if (!applies || !g_cfg.jointSnap || d < 1e-5f) return r;
 
-    bool was = h.pinched;
-    if (h.pinched) {
-        if (d > g_cfg.jointRelease) h.pinched = false;
-    } else if (d < g_cfg.jointClose) {
-        h.pinched = true;
+    // ---- how fast is the gap changing? (smoothed; tracking jitter is a few mm per frame)
+    // Use the app's frame time; fall back to a local clock if the app passes none.
+    int64_t now = (info && info->time > 0) ? (int64_t)info->time : steadyNs();
+    float frameDt = 0.f;
+    if (h.ds < 0.f || h.lastT == 0) {
+        h.ds = d;
+        h.v = 0.f;
+        h.lastT = now;
+    } else if (now > h.lastT) {
+        frameDt = (float)((now - h.lastT) * 1e-9);
+        if (frameDt > 0.2f) {  // hand was lost for a while: start afresh
+            h.ds = d;
+            h.v = 0.f;
+            frameDt = 0.f;
+        } else {
+            float a = 1.f - std::exp(-frameDt / 0.020f);
+            float nds = h.ds + (d - h.ds) * a;
+            float vi = (nds - h.ds) / frameDt;
+            h.v += (vi - h.v) * (1.f - std::exp(-frameDt / 0.030f));
+            h.ds = nds;
+        }
+        h.lastT = now;
+    }  // same timestamp queried again: no new motion sample
+
+    const float close = g_cfg.jointClose, release = g_cfg.jointRelease, open = g_cfg.jointOpen;
+    const float speed = g_cfg.fastPinchSpeed;
+    const char* hn = handName(h.hand);
+    HandState::Mode before = h.mode;
+    switch (h.mode) {
+        case HandState::Hidden:
+            if (d < close) {
+                h.mode = HandState::PinchHidden;
+            } else if (g_cfg.fastPinch && d < open && h.v < -speed) {
+                h.mode = HandState::Pass;
+                h.stallSince = 0;
+            }
+            break;
+        case HandState::PinchHidden:
+            if (d > release) h.mode = HandState::Hidden;
+            break;
+        case HandState::Pass:
+            if (d < close) {
+                h.mode = HandState::PassPinched;
+                ++h.quickPinches;
+            } else if (d >= open) {
+                h.mode = HandState::Hidden;
+            } else if (h.v > -speed * 0.3f) {
+                // Closing stopped short of a pinch (fingers resting): hide it again shortly.
+                if (!h.stallSince) h.stallSince = now;
+                else if (now - h.stallSince > 120000000LL) h.mode = HandState::Hidden;
+            } else {
+                h.stallSince = 0;
+            }
+            break;
+        case HandState::PassPinched:
+            // Fingers opening again: once clearly apart, go back to hiding half pinches.
+            if (d > release || (d > close + 0.01f && h.v > speed * 0.5f)) h.mode = HandState::Hidden;
+            break;
     }
-    if (was != h.pinched)
-        logf(1, "%s pinch %s at %.1fcm", handName(h.hand), h.pinched ? "ON" : "off", d * 100.f);
+    if (h.mode != before) {
+        switch (h.mode) {
+            case HandState::PinchHidden: logf(1, "%s pinch ON at %.1fcm", hn, d * 100.f); break;
+            case HandState::Pass: logf(1, "%s quick pinch starting at %.1fcm (%.0fcm/s): passing through", hn, d * 100.f, -h.v * 100.f); break;
+            case HandState::PassPinched: logf(1, "%s quick pinch ON at %.1fcm", hn, d * 100.f); break;
+            case HandState::Hidden:
+                if (before == HandState::Pass) logf(1, "%s quick close stopped at %.1fcm: hiding again", hn, d * 100.f);
+                else logf(1, "%s pinch off at %.1fcm", hn, d * 100.f);
+                break;
+        }
+    }
 
     float target = d;
-    if (h.pinched) target = std::min(d, g_cfg.jointPinched);
-    else if (d < g_cfg.jointOpen) target = g_cfg.jointOpen;
+    switch (h.mode) {
+        case HandState::Hidden: target = d < open ? open : d; break;
+        case HandState::PinchHidden: target = std::min(d, g_cfg.jointPinched); break;
+        case HandState::Pass: {
+            // Ease from what the app saw last frame to the real gap over a few frames, so the
+            // thumb doesn't teleport in from the "open hand" distance.
+            float prev = h.reported > 0.f ? h.reported : d;
+            float step = frameDt > 0.f ? 1.5f * std::min(frameDt, 0.05f) : 0.f;  // no new frame: hold
+            target = prev + std::max(-step, std::min(step, d - prev));
+            break;
+        }
+        case HandState::PassPinched: target = d; break;
+    }
+    h.reported = target;
     if (target == d) return r;
 
     // Move the thumb tip to `target` from the index tip. When the tips are close, the

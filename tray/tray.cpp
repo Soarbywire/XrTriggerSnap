@@ -106,6 +106,7 @@ enum CtlId {
     IDC_AUTO_UPDATE,
     IDC_CHECK_NOW,
     IDC_UPDATE_STATUS,
+    IDC_FAST_PINCH,
 };
 
 // ---------------------------------------------------------------- defaults
@@ -120,6 +121,7 @@ struct Settings {
     int logLevel = 1;
     bool checkUpdates = true;
     bool autoUpdate = true;
+    bool fastPinch = true;
 };
 
 // ---------------------------------------------------------------- globals
@@ -265,6 +267,7 @@ Settings loadSettings() {
     if (iniGet(lines, "log_level", v)) s.logLevel = std::max(0, std::min(2, atoi(v.c_str())));
     if (iniGet(lines, "check_updates", v)) s.checkUpdates = parseBool(v);
     if (iniGet(lines, "auto_update", v)) s.autoUpdate = parseBool(v);
+    if (iniGet(lines, "fast_pinch", v)) s.fastPinch = parseBool(v);
     return s;
 }
 
@@ -279,6 +282,7 @@ bool saveSettings(const Settings& s) {
     iniSet(lines, "log_level", std::to_string(s.logLevel));
     iniSet(lines, "check_updates", s.checkUpdates ? "1" : "0");
     iniSet(lines, "auto_update", s.autoUpdate ? "1" : "0");
+    iniSet(lines, "fast_pinch", s.fastPinch ? "1" : "0");
     return writeLines(lines);
 }
 
@@ -750,6 +754,7 @@ void fillSettings(HWND dlg, const Settings& s, bool startup) {
     SendDlgItemMessageW(dlg, IDC_LOG, CB_SETCURSEL, s.logLevel, 0);
     CheckDlgButton(dlg, IDC_CHECK_UPDATES, s.checkUpdates ? BST_CHECKED : BST_UNCHECKED);
     CheckDlgButton(dlg, IDC_AUTO_UPDATE, s.autoUpdate ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(dlg, IDC_FAST_PINCH, s.fastPinch ? BST_CHECKED : BST_UNCHECKED);
 }
 
 void refreshSettingsStatus() {
@@ -778,6 +783,7 @@ bool applySettings(HWND dlg) {
     bool wasChecking = s.checkUpdates;
     s.checkUpdates = IsDlgButtonChecked(dlg, IDC_CHECK_UPDATES) == BST_CHECKED;
     s.autoUpdate = IsDlgButtonChecked(dlg, IDC_AUTO_UPDATE) == BST_CHECKED;
+    s.fastPinch = IsDlgButtonChecked(dlg, IDC_FAST_PINCH) == BST_CHECKED;
     if (s.checkUpdates && !wasChecking) g_nextCheck = GetTickCount64() + 2000;  // just switched on: check soon
     if (!s.checkUpdates) g_nextCheck = 0;
 
@@ -810,7 +816,7 @@ LRESULT CALLBACK settingsProc(HWND hwnd, UINT m, WPARAM wp, LPARAM lp) {
         case WM_CREATE: {
             // Layout in 96-dpi units; S() scales.
             int y = 12;
-            ctl(hwnd, L"BUTTON", L"Filter", BS_GROUPBOX, 12, y, 396, 74, 0);
+            ctl(hwnd, L"BUTTON", L"Filter", BS_GROUPBOX, 12, y, 396, 98, 0);
             ctl(hwnd, L"BUTTON", L"&Filter on (the laser only appears on a full pinch)", BS_AUTOCHECKBOX | WS_TABSTOP,
                 24, y + 20, 370, 20, IDC_ENABLED);
             ctl(hwnd, L"STATIC", L"&Apply to:", SS_LEFT, 24, y + 47, 80, 18, 0);
@@ -819,8 +825,10 @@ LRESULT CALLBACK settingsProc(HWND hwnd, UINT m, WPARAM wp, LPARAM lp) {
             SendMessageW(hands, CB_ADDSTRING, 0, (LPARAM)L"Both hands");
             SendMessageW(hands, CB_ADDSTRING, 0, (LPARAM)L"Left hand only");
             SendMessageW(hands, CB_ADDSTRING, 0, (LPARAM)L"Right hand only");
+            ctl(hwnd, L"BUTTON", L"&Quick pinches use your real finger positions (more accurate)",
+                BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 72, 378, 20, IDC_FAST_PINCH);
 
-            y += 86;
+            y += 110;
             ctl(hwnd, L"BUTTON", L"Pinch distances (thumb tip to index tip)", BS_GROUPBOX, 12, y, 396, 132, 0);
             struct Row {
                 const wchar_t* label;
@@ -924,7 +932,7 @@ void showSettings() {
     g_dpi = GetDeviceCaps(dc, LOGPIXELSY);
     ReleaseDC(nullptr, dc);
 
-    RECT rc{0, 0, S(420), S(568)};
+    RECT rc{0, 0, S(420), S(592)};
     DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
     AdjustWindowRectEx(&rc, style, FALSE, WS_EX_DLGMODALFRAME);
     int w = rc.right - rc.left, h = rc.bottom - rc.top;

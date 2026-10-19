@@ -67,6 +67,7 @@ All changes apply within a second, even mid-flight. No X-Plane restart needed.
 |---|---|---|
 | Filter on | On | Off = X-Plane behaves exactly as if this wasn't installed. |
 | Apply to | Both hands | Limit the filter to one hand. |
+| Quick pinches use your real finger positions | On | A quick, deliberate pinch gets your real finger positions, so it lands exactly where your fingers are. Only slow drift and resting near-pinches are hidden. You may see the laser flicker briefly during a quick pinch. Off = every half pinch is hidden (less accurate on small targets). |
 | Pinch at | 1.1 cm | Thumb-to-index gap that counts as a pinch. Lower = fewer accidental pinches; too low and real pinches won't register. Touching fingertips track at about 1–1.5 cm. |
 | Release at | 3.0 cm | Once pinched, it stays pinched until your fingers open this far, so a shaky pinch doesn't flicker. |
 | Open hand | 7.0 cm | Any half pinch is reported to X-Plane as this gap. |
@@ -103,7 +104,9 @@ settings, and you can always install by hand from the releases page.
 `trigger_snap.log` is next to the program (or in `%TEMP%` if that folder isn't writable).
 
 - **`started tray app` / `hand tracker created`**: the filter is loaded and reading your hands.
-- **`right pinch ON at 1.2cm` / `off at 3.1cm`**: each pinch it detected.
+- **`right pinch ON at 1.2cm` / `off at 3.1cm`**: each slow pinch it detected.
+- **`right quick pinch starting ... passing through` / `quick pinch ON`**: a quick pinch that got
+  your real finger positions.
 - **`activity (last 5s)`**: the closest thumb-index gap seen, which helps when tuning "Pinch at".
 - **`settings reloaded`**: a change from the tray app was picked up.
 
@@ -116,6 +119,8 @@ settings, and you can always install by hand from the releases page.
 - **Pinches don't register:** raise Pinch at (try 1.3).
 - **Laser still appears when you don't mean it to:** lower Pinch at (try 1.0) and check the log's
   `activity` lines for how close your fingers get when relaxed.
+- **Pinches land off target or don't register on small controls:** make sure "Quick pinches use
+  your real finger positions" is ticked, and pinch briskly rather than slowly.
 
 ## Uninstall
 
