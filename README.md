@@ -106,7 +106,8 @@ settings, and you can always install by hand from the releases page.
 - **`started tray app` / `hand tracker created`**: the filter is loaded and reading your hands.
 - **`right pinch ON at 1.2cm` / `off at 3.1cm`**: each slow pinch it detected.
 - **`right quick pinch starting ... passing through` / `quick pinch ON`**: a quick pinch that got
-  your real finger positions.
+  your real finger positions. `quick close ended ... without a pinch` means your fingers came
+  close quickly but didn't pinch, so the half pinch was hidden again.
 - **`activity (last 5s)`**: the closest thumb-index gap seen, which helps when tuning "Pinch at".
 - **`settings reloaded`**: a change from the tray app was picked up.
 

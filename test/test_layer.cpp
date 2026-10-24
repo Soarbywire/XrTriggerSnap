@@ -240,8 +240,9 @@ int main(int argc, char** argv) {
             if (d > 0.011f && approx(rep, std::max(d, 0.009f))) sawReal = true;
         }
         CHECK(sawReal, "A: real gap reaches the app before the pinch lands");
-        CHECK(approx(rep, 0.009f), "A: at the quick pinch the thumb is untouched (got %.4f)", rep);
-        CHECK(approx(rest(0.009f, 20), 0.009f), "A: held quick pinch stays untouched");
+        CHECK(rep <= 0.009f + 1e-4f && rep >= 0.005f - 1e-4f, "A: quick pinch lands as a firm pinch (got %.4f)", rep);
+        CHECK(approx(rest(0.009f, 20), 0.005f), "A: held quick pinch held firmly");
+        CHECK(approx(rest(0.013f, 30), 0.005f), "A: resting just above the pinch mark stays a firm pinch, not a half pinch");
         // open again quickly
         d = 0.009f;
         for (int i = 0; i < 10; ++i) { d += 0.006f; rep = at(d); }
@@ -274,6 +275,56 @@ int main(int argc, char** argv) {
         CHECK(approx(at(0.010f), 0.005f), "D: slow pinch latches to the firm 0.5cm pinch");
         CHECK(approx(rest(0.025f, 5), 0.005f), "D: holds until opened past release");
         CHECK(approx(rest(0.035f, 3), 0.07f), "D: released");
+
+        // F. Realistic jitter: fingers held close together (1.6 cm) with +/-2.5 mm tracking noise
+        //    per frame, after a quick move toward the thumb. Must end up hidden and stay hidden.
+        rest(0.10f, 10);
+        rest(0.06f, 40);
+        d = 0.06f;
+        while (d > 0.016f) { d -= 0.0033f; at(d); }
+        unsigned seed = 12345;
+        auto noise = [&]() { seed = seed * 1103515245u + 12345u; return ((seed >> 16) % 1000) / 1000.f * 0.005f - 0.0025f; };
+        int visible = 0, visibleAfter300ms = 0;
+        for (int i = 0; i < 270; ++i) {  // 3 seconds
+            float r = at(0.016f + noise());
+            if (r < 0.069f) { ++visible; if (i >= 27) ++visibleAfter300ms; }
+        }
+        if (getenv("TRACE")) printf("  jitter: half pinch visible %d of 270 frames, %d after the first 300 ms\n", visible, visibleAfter300ms);
+        if (getenv("SWEEP")) {
+            for (float amp : {0.0025f, 0.005f, 0.008f})
+                for (float hold : {0.013f, 0.016f, 0.02f, 0.03f}) {
+                    rest(0.10f, 10); rest(0.06f, 40);
+                    float dd = 0.06f;
+                    while (dd > hold) { dd -= 0.0033f; at(dd); }
+                    int vis = 0, late = 0, entries = 0;
+                    for (int i = 0; i < 270; ++i) {
+                        seed = seed * 1103515245u + 12345u;
+                        float n = ((seed >> 16) % 1000) / 1000.f * 2 * amp - amp;
+                        float r = at(hold + n);
+                        if (r < 0.069f && r > 0.0051f) { ++vis; if (i >= 27) ++late; }
+                    }
+                    (void)entries;
+                    printf("  amp +/-%.1fmm hold %.1fcm: half pinch shown %3d/270 frames, %3d after 300ms\n", amp * 1000, hold * 100, vis, late);
+                }
+        }
+        CHECK(visibleAfter300ms == 0, "F: resting fingers with jitter hidden after 300 ms (visible %d frames later)", visibleAfter300ms);
+        // G. The case from VR: quick move to ~1.3 cm and rest there with jitter that dips under
+        //    the 1.1 cm pinch mark. Never a lingering half pinch.
+        for (float amp : {0.0025f, 0.005f, 0.008f}) {
+            for (float hold : {0.013f, 0.016f, 0.02f, 0.03f}) {
+                rest(0.10f, 10); rest(0.06f, 40);
+                float dd = 0.06f;
+                while (dd > hold) { dd -= 0.0033f; at(dd); }
+                int late = 0;
+                for (int i = 0; i < 270; ++i) {
+                    seed = seed * 1103515245u + 12345u;
+                    float n = ((seed >> 16) % 1000) / 1000.f * 2 * amp - amp;
+                    float r = at(hold + n);
+                    if (r < 0.069f && r > 0.0051f && i >= 33) ++late;  // half pinch after 0.36 s
+                }
+                CHECK(late == 0, "G: +/-%.1fmm jitter resting at %.1fcm: half pinch still shown %d frames", amp * 1000, hold * 100, late);
+            }
+        }
 
         // E. Quick-pinch pass-through can be switched off.
         li2.time = 0;

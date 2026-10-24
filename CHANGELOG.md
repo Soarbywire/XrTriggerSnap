@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.2
+
+- Fixed: the laser could stay on while a finger rested close to the thumb. After a quick move
+  toward the thumb, tracking jitter dipping under the pinch mark counted as a landed pinch,
+  and the filter then kept passing real positions through, which X-Plane saw as a half pinch,
+  until the fingers opened past 3 cm. A quick pinch is now held as a firm pinch once it lands,
+  the same as a slow pinch.
+- A quick pinch now needs a real closing movement (at least 1.5 cm within 0.3 s), so tracking
+  jitter on a resting hand can't trigger it, and a quick close that doesn't become a pinch within
+  0.3 s is hidden again.
+
 ## 1.0.1
 
 - Fixed: finger-and-thumb pinches could land off target or not register, while laser clicks

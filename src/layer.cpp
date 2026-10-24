@@ -275,7 +275,7 @@ struct HandState {
     // Hidden:      fingers apart or drifting; any half pinch is reported as an open hand
     // PinchHidden: slow pinch reached; reported firmly pinched until the fingers open again
     // Pass:        fingers closing quickly (a deliberate pinch); real positions passed through
-    // PassPinched: that quick pinch landed; still passing real positions through
+    // PassPinched: that quick pinch landed; held as a firm pinch until the fingers open
     enum Mode { Hidden, PinchHidden, Pass, PassPinched };
     XrHandEXT hand = XR_HAND_LEFT_EXT;
     bool firstLocateLogged = false;
@@ -286,9 +286,24 @@ struct HandState {
     float v = 0.f;             // smoothed rate of change of the gap (m/s, negative = closing)
     float reported = -1.f;     // gap reported to the app last frame (m)
     int64_t stallSince = 0;    // when a quick close stopped moving (ns)
+    int64_t passSince = 0;     // when the current quick close started (ns)
+    struct Sample { int64_t t; float ds; };
+    Sample hist[48] = {};      // recent smoothed gaps, for "how far has it closed lately"
+    int histN = 0, histHead = 0;
+    void push(int64_t t, float v) {
+        hist[histHead] = {t, v};
+        histHead = (histHead + 1) % 48;
+        if (histN < 48) ++histN;
+    }
+    float maxSince(int64_t t0) const {
+        float m = -1.f;
+        for (int i = 0; i < histN; ++i)
+            if (hist[i].t >= t0 && hist[i].ds > m) m = hist[i].ds;
+        return m;
+    }
     float minDist = 1e9f, maxAim = 0.f;  // activity since last summary
     int quickPinches = 0;                // since last summary
-    void reset() { mode = Hidden; aimPinched = false; reported = -1.f; stallSince = 0; }
+    void reset() { mode = Hidden; aimPinched = false; reported = -1.f; stallSince = 0; passSince = 0; histN = 0; }
 };
 
 int64_t steadyNs() {
@@ -616,11 +631,14 @@ XrResult XRAPI_CALL hook_xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const X
         h.ds = d;
         h.v = 0.f;
         h.lastT = now;
+        h.histN = 0;
+        h.push(now, d);
     } else if (now > h.lastT) {
         frameDt = (float)((now - h.lastT) * 1e-9);
         if (frameDt > 0.2f) {  // hand was lost for a while: start afresh
             h.ds = d;
             h.v = 0.f;
+            h.histN = 0;
             frameDt = 0.f;
         } else {
             float a = 1.f - std::exp(-frameDt / 0.020f);
@@ -630,6 +648,7 @@ XrResult XRAPI_CALL hook_xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const X
             h.ds = nds;
         }
         h.lastT = now;
+        h.push(now, h.ds);
     }  // same timestamp queried again: no new motion sample
 
     const float close = g_cfg.jointClose, release = g_cfg.jointRelease, open = g_cfg.jointOpen;
@@ -640,9 +659,13 @@ XrResult XRAPI_CALL hook_xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const X
         case HandState::Hidden:
             if (d < close) {
                 h.mode = HandState::PinchHidden;
-            } else if (g_cfg.fastPinch && d < open && h.v < -speed) {
+            } else if (g_cfg.fastPinch && d < open && h.v < -speed &&
+                       h.maxSince(now - 300000000LL) - h.ds >= 0.015f) {
+                // Closing fast AND by a real distance (>= 1.5 cm in the last 0.3 s), so
+                // tracking jitter on a resting hand can't trigger it.
                 h.mode = HandState::Pass;
                 h.stallSince = 0;
+                h.passSince = now;
             }
             break;
         case HandState::PinchHidden:
@@ -652,7 +675,8 @@ XrResult XRAPI_CALL hook_xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const X
             if (d < close) {
                 h.mode = HandState::PassPinched;
                 ++h.quickPinches;
-            } else if (d >= open) {
+            } else if (d >= open || now - h.passSince > 300000000LL) {
+                // Opened again, or a real pinch would have landed by now.
                 h.mode = HandState::Hidden;
             } else if (h.v > -speed * 0.3f) {
                 // Closing stopped short of a pinch (fingers resting): hide it again shortly.
@@ -663,8 +687,10 @@ XrResult XRAPI_CALL hook_xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const X
             }
             break;
         case HandState::PassPinched:
-            // Fingers opening again: once clearly apart, go back to hiding half pinches.
-            if (d > release || (d > close + 0.01f && h.v > speed * 0.5f)) h.mode = HandState::Hidden;
+            // Held as a firm pinch, exactly like a slow pinch, until the fingers open past
+            // the release distance. (Passing raw positions here let a near-pinch resting just
+            // above the pinch mark show up as a half pinch, i.e. a lingering laser.)
+            if (d > release) h.mode = HandState::Hidden;
             break;
     }
     if (h.mode != before) {
@@ -673,7 +699,7 @@ XrResult XRAPI_CALL hook_xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const X
             case HandState::Pass: logf(1, "%s quick pinch starting at %.1fcm (%.0fcm/s): passing through", hn, d * 100.f, -h.v * 100.f); break;
             case HandState::PassPinched: logf(1, "%s quick pinch ON at %.1fcm", hn, d * 100.f); break;
             case HandState::Hidden:
-                if (before == HandState::Pass) logf(1, "%s quick close stopped at %.1fcm: hiding again", hn, d * 100.f);
+                if (before == HandState::Pass) logf(1, "%s quick close ended at %.1fcm without a pinch: hiding again", hn, d * 100.f);
                 else logf(1, "%s pinch off at %.1fcm", hn, d * 100.f);
                 break;
         }
@@ -691,7 +717,7 @@ XrResult XRAPI_CALL hook_xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const X
             target = prev + std::max(-step, std::min(step, d - prev));
             break;
         }
-        case HandState::PassPinched: target = d; break;
+        case HandState::PassPinched: target = std::min(d, g_cfg.jointPinched); break;
     }
     h.reported = target;
     if (target == d) return r;
