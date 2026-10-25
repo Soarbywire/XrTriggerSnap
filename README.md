@@ -68,9 +68,9 @@ All changes apply within a second, even mid-flight. No X-Plane restart needed.
 | Filter on | On | Off = X-Plane behaves exactly as if this wasn't installed. |
 | Apply to | Both hands | Limit the filter to one hand. |
 | Quick pinches use your real finger positions | On | A quick, deliberate pinch gets your real finger positions, so it lands exactly where your fingers are. Only slow drift and resting near-pinches are hidden. You may see the laser flicker briefly during a quick pinch. Off = every half pinch is hidden (less accurate on small targets). |
-| Pinch at | 1.1 cm | Thumb-to-index gap that counts as a pinch. Lower = fewer accidental pinches; too low and real pinches won't register. Touching fingertips track at about 1–1.5 cm. |
+| Pinch at | 1.1 cm | Thumb-to-index gap that counts as a pinch. Lower = fewer accidental pinches; too low and real pinches won't register. Touching fingertips track at about 1–1.5 cm, so going below 1.0 cm makes pinches unreliable. |
 | Release at | 3.0 cm | Once pinched, it stays pinched until your fingers open this far, so a shaky pinch doesn't flicker. |
-| Open hand | 7.0 cm | Any half pinch is reported to X-Plane as this gap. |
+| Open hand | 7.0 cm | Any half pinch is reported to X-Plane as this gap. Higher values hide the laser more firmly but make slow pinches less accurate. |
 | Start with Windows / X-Plane | Off / On | See [How it starts](#how-it-starts). |
 | Check for updates automatically | On | Checks GitHub shortly after the tray app starts, then every 6 hours. |
 | Install updates automatically | On | Downloads, verifies and installs new versions on its own. Off = you're told an update is available and install it from the menu. |

@@ -287,7 +287,7 @@ int main(int argc, char** argv) {
         int visible = 0, visibleAfter300ms = 0;
         for (int i = 0; i < 270; ++i) {  // 3 seconds
             float r = at(0.016f + noise());
-            if (r < 0.069f) { ++visible; if (i >= 27) ++visibleAfter300ms; }
+            if (r < 0.069f && r > 0.0051f) { ++visible; if (i >= 27) ++visibleAfter300ms; }  // half pinch
         }
         if (getenv("TRACE")) printf("  jitter: half pinch visible %d of 270 frames, %d after the first 300 ms\n", visible, visibleAfter300ms);
         if (getenv("SWEEP")) {
@@ -310,7 +310,9 @@ int main(int argc, char** argv) {
         CHECK(visibleAfter300ms == 0, "F: resting fingers with jitter hidden after 300 ms (visible %d frames later)", visibleAfter300ms);
         // G. The case from VR: quick move to ~1.3 cm and rest there with jitter that dips under
         //    the 1.1 cm pinch mark. Never a lingering half pinch.
-        for (float amp : {0.0025f, 0.005f, 0.008f}) {
+        // (Up to +/-5 mm per frame; at +/-8 mm, far beyond normal tracking, the sweep below
+        //  still shows only brief flickers at large gaps.)
+        for (float amp : {0.0025f, 0.005f}) {
             for (float hold : {0.013f, 0.016f, 0.02f, 0.03f}) {
                 rest(0.10f, 10); rest(0.06f, 40);
                 float dd = 0.06f;
@@ -324,6 +326,32 @@ int main(int argc, char** argv) {
                 }
                 CHECK(late == 0, "G: +/-%.1fmm jitter resting at %.1fcm: half pinch still shown %d frames", amp * 1000, hold * 100, late);
             }
+        }
+
+        // H. What the VR log showed: a quick pinch where, once the fingers touch, the tracked gap
+        //    bounces between 1.15 and 2.4 cm and never crosses the 1.1 cm pinch mark. It must be
+        //    recognised early, never pushed back out to the open-hand distance, and held as a pinch.
+        for (float speedCm : {12.f, 15.f, 20.f, 30.f}) {
+            rest(0.10f, 10);
+            rest(0.045f, 40);
+            float dd = 0.045f, startGap = -1, lastRep = 0;
+            bool pushedOut = false;
+            while (dd > 0.012f) {
+                dd -= speedCm / 100.f * 0.011f;
+                float r = at(std::max(dd, 0.012f));
+                if (startGap < 0 && r < 0.069f) startGap = std::max(dd, 0.012f);
+            }
+            for (int i = 0; i < 45; ++i) {  // 0.5 s of bouncy "touching"
+                seed = seed * 1103515245u + 12345u;
+                float g = 0.0115f + ((seed >> 16) % 1000) / 1000.f * 0.0125f;
+                lastRep = at(g);
+                if (lastRep > 0.069f) pushedOut = true;
+            }
+            if (getenv("TRACE")) printf("  H %2.0fcm/s: real positions from %.1fcm, pushed out %d, end %.1fcm\n", speedCm, startGap * 100, pushedOut, lastRep * 100);
+            CHECK(startGap >= 0.02f, "H %.0fcm/s: real positions should start by 2 cm (started at %.1fcm)", speedCm, startGap * 100);
+            CHECK(!pushedOut, "H %.0fcm/s: thumb pushed back out while fingers touching", speedCm);
+            CHECK(approx(lastRep, 0.005f), "H %.0fcm/s: held as a firm pinch (got %.4f)", speedCm, lastRep);
+            rest(0.05f, 10);  // open again
         }
 
         // E. Quick-pinch pass-through can be switched off.

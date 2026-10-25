@@ -5,8 +5,8 @@
 
 #define XRTS_VERSION_MAJOR 1
 #define XRTS_VERSION_MINOR 0
-#define XRTS_VERSION_PATCH 2
-#define XRTS_VERSION "1.0.2"
+#define XRTS_VERSION_PATCH 3
+#define XRTS_VERSION "1.0.3"
 
 // owner/repo on GitHub whose Releases the tray app checks for updates.
 #define XRTS_GITHUB_REPO "Soarbywire/XrTriggerSnap"

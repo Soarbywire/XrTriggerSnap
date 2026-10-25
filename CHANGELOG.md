@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.3
+
+- Better pinch accuracy. A VR log showed quick pinches being recognised only when the fingers
+  were already nearly touching (about 1.2 cm), then dropped after 0.3 s because the tracked gap
+  while touching bounced between about 0.8 and 2.5 cm without crossing the pinch mark. The pinch
+  then registered later as a slow pinch, with the thumb snapping in from the open-hand distance,
+  which is what put it off target.
+  - Quick pinches are recognised earlier, from about 3 cm (closing at least 1 cm, faster than
+    10 cm/s, down from 15 cm/s).
+  - Once a quick pinch gets within 0.4 cm of the pinch mark, it counts as landed and is held,
+    even if the bouncing gap never crosses the mark. The thumb is no longer pushed back out
+    while your fingers touch.
+
 ## 1.0.2
 
 - Fixed: the laser could stay on while a finger rested close to the thumb. After a quick move

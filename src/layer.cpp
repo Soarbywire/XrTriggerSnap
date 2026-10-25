@@ -82,7 +82,7 @@ struct Config {
     // places the pinch exactly where the fingers are). Only slow drift / resting near-pinches
     // are hidden. "Quick" = thumb-index gap closing faster than this (m/s).
     bool fastPinch = true;
-    float fastPinchSpeed = 0.15f;
+    float fastPinchSpeed = 0.10f;
     int logLevel = 1;  // 0 off, 1 setup info, 2 also value changes
     bool launchTray = true;  // start XrTriggerSnap.exe (tray app) when X-Plane loads the layer
 };
@@ -299,6 +299,12 @@ struct HandState {
         float m = -1.f;
         for (int i = 0; i < histN; ++i)
             if (hist[i].t >= t0 && hist[i].ds > m) m = hist[i].ds;
+        return m;
+    }
+    float minSince(int64_t t0) const {
+        float m = 1e9f;
+        for (int i = 0; i < histN; ++i)
+            if (hist[i].t >= t0 && hist[i].ds < m) m = hist[i].ds;
         return m;
     }
     float minDist = 1e9f, maxAim = 0.f;  // activity since last summary
@@ -644,7 +650,7 @@ XrResult XRAPI_CALL hook_xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const X
             float a = 1.f - std::exp(-frameDt / 0.020f);
             float nds = h.ds + (d - h.ds) * a;
             float vi = (nds - h.ds) / frameDt;
-            h.v += (vi - h.v) * (1.f - std::exp(-frameDt / 0.030f));
+            h.v += (vi - h.v) * (1.f - std::exp(-frameDt / 0.020f));
             h.ds = nds;
         }
         h.lastT = now;
@@ -660,8 +666,8 @@ XrResult XRAPI_CALL hook_xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const X
             if (d < close) {
                 h.mode = HandState::PinchHidden;
             } else if (g_cfg.fastPinch && d < open && h.v < -speed &&
-                       h.maxSince(now - 300000000LL) - h.ds >= 0.015f) {
-                // Closing fast AND by a real distance (>= 1.5 cm in the last 0.3 s), so
+                       h.maxSince(now - 250000000LL) - h.ds >= 0.010f) {
+                // Closing fast AND by a real distance (>= 1 cm in the last 0.25 s), so
                 // tracking jitter on a resting hand can't trigger it.
                 h.mode = HandState::Pass;
                 h.stallSince = 0;
@@ -671,21 +677,28 @@ XrResult XRAPI_CALL hook_xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const X
         case HandState::PinchHidden:
             if (d > release) h.mode = HandState::Hidden;
             break;
-        case HandState::Pass:
+        case HandState::Pass: {
+            // Touching fingertips track anywhere from ~0.8 to ~1.5 cm apart and bounce around
+            // while they touch, so "the fingers got within 0.4 cm of the pinch mark" counts as
+            // the pinch landing even if the gap never quite crosses the mark.
+            const bool gotNear = h.minSince(h.passSince) < close + 0.004f;
+            bool settle = false;
             if (d < close) {
                 h.mode = HandState::PassPinched;
-                ++h.quickPinches;
-            } else if (d >= open || now - h.passSince > 300000000LL) {
-                // Opened again, or a real pinch would have landed by now.
+            } else if (d >= open) {
                 h.mode = HandState::Hidden;
             } else if (h.v > -speed * 0.3f) {
-                // Closing stopped short of a pinch (fingers resting): hide it again shortly.
+                // Closing has stopped (or the gap is bouncing back up).
                 if (!h.stallSince) h.stallSince = now;
-                else if (now - h.stallSince > 120000000LL) h.mode = HandState::Hidden;
+                else if (now - h.stallSince > 80000000LL) settle = true;
             } else {
                 h.stallSince = 0;
             }
+            if (h.mode == HandState::Pass && now - h.passSince > 400000000LL) settle = true;
+            if (settle) h.mode = gotNear ? HandState::PassPinched : HandState::Hidden;
+            if (h.mode == HandState::PassPinched) ++h.quickPinches;
             break;
+        }
         case HandState::PassPinched:
             // Held as a firm pinch, exactly like a slow pinch, until the fingers open past
             // the release distance. (Passing raw positions here let a near-pinch resting just
