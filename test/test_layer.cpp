@@ -18,6 +18,7 @@
 #endif
 #include <fstream>
 #include <chrono>
+#include <thread>
 #include <openxr/openxr.h>
 #include <openxr/openxr_loader_negotiation.h>
 
@@ -198,10 +199,14 @@ int main(int argc, char** argv) {
     CHECK(approx(seen(0.013f), 0.07f), "1.3cm not a pinch with default 1.1cm close");
     CHECK(approx(seen(0.01f), 0.005f), "1cm pinches -> 0.5cm");
     CHECK(approx(seen(0.025f), 0.005f), "2.5cm held pinched (hysteresis)");
-    CHECK(approx(seen(0.035f), 0.07f), "3.5cm releases -> 7cm");
+    seen(0.035f);  // a release only counts once the fingers stay apart for 80 ms
+    std::this_thread::sleep_for(std::chrono::milliseconds(90));
+    CHECK(approx(seen(0.035f), 0.07f), "3.5cm (held 90 ms) releases -> 7cm");
     CHECK(approx(seen(0.003f), 0.003f), "already closer than pinched distance left alone");
     // noisy tip direction: thumb must open along index->distal (+x), not sideways
-    seen(0.10f);  // release the pinch from the previous step
+    seen(0.10f);  // release the pinch from the previous step (held past the 80 ms debounce)
+    std::this_thread::sleep_for(std::chrono::milliseconds(90));
+    seen(0.10f);
     tipSideways = true;
     seen(0.02f);
     { auto& t = joints[XR_HAND_JOINT_THUMB_TIP_EXT].pose.position;
@@ -245,7 +250,7 @@ int main(int argc, char** argv) {
         CHECK(approx(rest(0.013f, 30), 0.005f), "A: resting just above the pinch mark stays a firm pinch, not a half pinch");
         // open again quickly
         d = 0.009f;
-        for (int i = 0; i < 10; ++i) { d += 0.006f; rep = at(d); }
+        for (int i = 0; i < 15; ++i) { d += 0.006f; rep = at(d); }
         CHECK(approx(rep, std::max(d, 0.07f)) || approx(rep, d), "A: after opening, back to hiding (got %.4f, d %.4f)", rep, d);
         CHECK(approx(rest(0.05f, 40), 0.07f), "A: half pinch hidden again afterwards");
 
@@ -274,7 +279,8 @@ int main(int argc, char** argv) {
         while (d > 0.010f) { d -= 0.0002f; at(d); }
         CHECK(approx(at(0.010f), 0.005f), "D: slow pinch latches to the firm 0.5cm pinch");
         CHECK(approx(rest(0.025f, 5), 0.005f), "D: holds until opened past release");
-        CHECK(approx(rest(0.035f, 3), 0.07f), "D: released");
+        CHECK(approx(rest(0.035f, 3), 0.005f), "D: a 33 ms spike past release doesn't let go");
+        CHECK(approx(rest(0.035f, 8), 0.07f), "D: released once open for 80 ms");
 
         // F. Realistic jitter: fingers held close together (1.6 cm) with +/-2.5 mm tracking noise
         //    per frame, after a quick move toward the thumb. Must end up hidden and stay hidden.
@@ -352,6 +358,36 @@ int main(int argc, char** argv) {
             CHECK(!pushedOut, "H %.0fcm/s: thumb pushed back out while fingers touching", speedCm);
             CHECK(approx(lastRep, 0.005f), "H %.0fcm/s: held as a firm pinch (got %.4f)", speedCm, lastRep);
             rest(0.05f, 10);  // open again
+        }
+
+        // I. One pinch must be exactly one click. Model X-Plane's own pinch detection on what it
+        //    is shown (press below `xp`, release above xp + 0.5 cm) for several plausible thresholds,
+        //    and replay pinches whose tracked gap bounces while the fingers touch, like the VR log.
+        for (float xp : {0.009f, 0.012f, 0.015f, 0.02f}) {
+            for (int kind = 0; kind < 2; ++kind) {  // 0 = quick pinch, 1 = slow pinch
+                int presses = 0;
+                bool down = false;
+                auto xplane = [&](float r) {
+                    if (!down && r < xp) { down = true; ++presses; }
+                    else if (down && r > xp + 0.005f) down = false;
+                };
+                rest(0.10f, 10);
+                rest(0.045f, 40);
+                float dd = 0.045f;
+                float step = kind == 0 ? 0.0025f : 0.0002f;
+                while (dd > 0.013f) { dd -= step; xplane(at(dd)); }
+                // touching: bounce 0.8..2.5 cm, with an occasional spike to 3.2 cm
+                for (int i = 0; i < 60; ++i) {
+                    seed = seed * 1103515245u + 12345u;
+                    float g = 0.008f + ((seed >> 16) % 1000) / 1000.f * 0.017f;
+                    if (i == 20 || i == 41) g = 0.032f;
+                    xplane(at(g));
+                }
+                // let go
+                for (int i = 0; i < 20; ++i) xplane(at(0.08f));
+                if (getenv("TRACE")) printf("  I xp=%.1fcm %s: %d click(s)\n", xp * 100, kind ? "slow " : "quick", presses);
+                CHECK(presses == 1, "I: X-Plane threshold %.1fcm, %s pinch with bounce: %d clicks (want 1)", xp * 100, kind ? "slow" : "quick", presses);
+            }
         }
 
         // E. Quick-pinch pass-through can be switched off.

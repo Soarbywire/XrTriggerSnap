@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.4
+
+- Fixed: one pinch could register as two or three clicks, so a switch toggled on and straight
+  back off. While fingertips touch, hand tracking can spike the thumb-index gap past the 3 cm
+  release distance for a frame or two; the filter let go on that spike and pinched again on the
+  next dip. A pinch now lets go only once the fingers stay apart for 80 ms.
+- During a quick pinch, the gap X-Plane sees can only shrink, so a tracking bounce can no
+  longer look like letting go.
+- Tested against a model of X-Plane's own pinch detection at thresholds from 0.9 to 2 cm: one
+  pinch, with bouncing and spikes like those in the VR logs, gives exactly one click.
+
 ## 1.0.3
 
 - Better pinch accuracy. A VR log showed quick pinches being recognised only when the fingers

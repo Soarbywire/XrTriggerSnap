@@ -287,6 +287,8 @@ struct HandState {
     float reported = -1.f;     // gap reported to the app last frame (m)
     int64_t stallSince = 0;    // when a quick close stopped moving (ns)
     int64_t passSince = 0;     // when the current quick close started (ns)
+    float passMin = 1e9f;      // smallest real gap since the quick close started (m)
+    int64_t overSince = 0;     // when the gap first went past the release distance (ns)
     struct Sample { int64_t t; float ds; };
     Sample hist[48] = {};      // recent smoothed gaps, for "how far has it closed lately"
     int histN = 0, histHead = 0;
@@ -309,7 +311,10 @@ struct HandState {
     }
     float minDist = 1e9f, maxAim = 0.f;  // activity since last summary
     int quickPinches = 0;                // since last summary
-    void reset() { mode = Hidden; aimPinched = false; reported = -1.f; stallSince = 0; passSince = 0; histN = 0; }
+    void reset() {
+        mode = Hidden; aimPinched = false; reported = -1.f; stallSince = 0; passSince = 0; histN = 0;
+        passMin = 1e9f; overSince = 0;
+    }
 };
 
 int64_t steadyNs() {
@@ -661,10 +666,20 @@ XrResult XRAPI_CALL hook_xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const X
     const float speed = g_cfg.fastPinchSpeed;
     const char* hn = handName(h.hand);
     HandState::Mode before = h.mode;
+    // A pinch lets go only once the fingers have stayed past the release distance for 80 ms.
+    // While fingertips touch, tracking can spike the gap past it for a frame or two; letting go
+    // on that and pinching again on the next dip turned one pinch into two or three clicks.
+    auto released = [&]() {
+        if (d <= release) { h.overSince = 0; return false; }
+        if (!h.overSince) h.overSince = now;
+        return now - h.overSince >= 80000000LL;
+    };
+    if (h.mode == HandState::Pass) h.passMin = std::min(h.passMin, d);
     switch (h.mode) {
         case HandState::Hidden:
             if (d < close) {
                 h.mode = HandState::PinchHidden;
+                h.overSince = 0;
             } else if (g_cfg.fastPinch && d < open && h.v < -speed &&
                        h.maxSince(now - 250000000LL) - h.ds >= 0.010f) {
                 // Closing fast AND by a real distance (>= 1 cm in the last 0.25 s), so
@@ -672,10 +687,11 @@ XrResult XRAPI_CALL hook_xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const X
                 h.mode = HandState::Pass;
                 h.stallSince = 0;
                 h.passSince = now;
+                h.passMin = 1e9f;
             }
             break;
         case HandState::PinchHidden:
-            if (d > release) h.mode = HandState::Hidden;
+            if (released()) h.mode = HandState::Hidden;
             break;
         case HandState::Pass: {
             // Touching fingertips track anywhere from ~0.8 to ~1.5 cm apart and bounce around
@@ -696,14 +712,17 @@ XrResult XRAPI_CALL hook_xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const X
             }
             if (h.mode == HandState::Pass && now - h.passSince > 400000000LL) settle = true;
             if (settle) h.mode = gotNear ? HandState::PassPinched : HandState::Hidden;
-            if (h.mode == HandState::PassPinched) ++h.quickPinches;
+            if (h.mode == HandState::PassPinched) {
+                ++h.quickPinches;
+                h.overSince = 0;
+            }
             break;
         }
         case HandState::PassPinched:
             // Held as a firm pinch, exactly like a slow pinch, until the fingers open past
             // the release distance. (Passing raw positions here let a near-pinch resting just
             // above the pinch mark show up as a half pinch, i.e. a lingering laser.)
-            if (d > release) h.mode = HandState::Hidden;
+            if (released()) h.mode = HandState::Hidden;
             break;
     }
     if (h.mode != before) {
@@ -728,6 +747,9 @@ XrResult XRAPI_CALL hook_xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const X
             float prev = h.reported > 0.f ? h.reported : d;
             float step = frameDt > 0.f ? 1.5f * std::min(frameDt, 0.05f) : 0.f;  // no new frame: hold
             target = prev + std::max(-step, std::min(step, d - prev));
+            // Never let the gap X-Plane sees open up again during a quick close: a tracking
+            // bounce would look like letting go, and the next dip like a second click.
+            target = std::min(target, h.passMin);
             break;
         }
         case HandState::PassPinched: target = std::min(d, g_cfg.jointPinched); break;
